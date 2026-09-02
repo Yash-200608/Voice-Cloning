@@ -10,6 +10,17 @@ from typing import Any
 from ..Config import REFERENCE_SECONDS, SAMPLE_RATE
 from ..audio_utils import audio_info, preprocess_reference
 from ..compatibility.legacy import migrate_legacy_voices
+from ..core.context import (
+    ContextProfile,
+    get_context_preset,
+    list_context_presets,
+    resolve_context,
+)
+from ..core.context_resolver import (
+    ContextResolutionResult,
+    ContextResolver,
+    resolve_expression_with_context,
+)
 from ..core.exceptions import (
     InvalidVoiceIdentity,
     MissingEmbedding,
@@ -35,7 +46,7 @@ logger = logging.getLogger(__name__)
 
 
 class VoiceIdentityService:
-    """Coordinates repository, audio, embeddings, expression, and rendering."""
+    """Coordinates repository, audio, embeddings, context, expression, and rendering."""
 
     def __init__(
         self,
@@ -44,11 +55,15 @@ class VoiceIdentityService:
         embedding_store: EmbeddingStore | None = None,
         *,
         auto_migrate: bool = True,
+        context_resolver: ContextResolver | None = None,
+        debug_context: bool = False,
     ):
         self.repository = repository or VoiceRepository()
         self.embedding_store = embedding_store or self.repository.embedding_store
         self.renderer = renderer or ChatterboxRenderer()
         self._auto_migrate = auto_migrate
+        self._context_resolver = context_resolver or ContextResolver()
+        self._debug_context = debug_context
         if auto_migrate:
             migrate_legacy_voices(self.repository)
 
@@ -68,6 +83,26 @@ class VoiceIdentityService:
 
     def get_expression_preset(self, name: str) -> ExpressionProfile:
         return get_expression_preset(name)
+
+    def list_context_presets(self) -> list[str]:
+        return list_context_presets()
+
+    def get_context_preset(self, name: str) -> ContextProfile:
+        return get_context_preset(name)
+
+    def resolve_render_plan(
+        self,
+        expression: str | ExpressionProfile | dict[str, Any] | None = None,
+        context: str | ContextProfile | dict[str, Any] | None = None,
+    ) -> ContextResolutionResult:
+        """Resolve base expression and apply contextual adjustments."""
+        base = resolve_expression(expression)
+        ctx = resolve_context(context)
+        return resolve_expression_with_context(
+            base,
+            ctx,
+            resolver=self._context_resolver,
+        )
 
     def create_from_recording(
         self,
@@ -118,6 +153,7 @@ class VoiceIdentityService:
         output_path: str | Path | None = None,
         *,
         expression: str | ExpressionProfile | dict[str, Any] | None = None,
+        context: str | ContextProfile | dict[str, Any] | None = None,
         exaggeration: float | None = None,
         cfg_weight: float | None = None,
         save_metadata: bool = True,
@@ -130,7 +166,7 @@ class VoiceIdentityService:
                 user_message="Reference audio is missing for this voice identity.",
             )
 
-        profile = resolve_expression(expression)
+        plan = self.resolve_render_plan(expression, context)
 
         if output_path is None:
             out_dir = self.repository.output_dir(identity_id)
@@ -142,7 +178,7 @@ class VoiceIdentityService:
                 text,
                 processed,
                 output_path,
-                expression=profile,
+                expression=plan.resolved_expression,
                 exaggeration=exaggeration,
                 cfg_weight=cfg_weight,
             )
@@ -153,7 +189,7 @@ class VoiceIdentityService:
             ) from e
 
         if save_metadata:
-            self._write_render_metadata(identity, profile, result)
+            self._write_render_metadata(identity, plan, result)
         return result
 
     def compare(self, identity_id: str, generated_audio: str | Path) -> float:
@@ -180,13 +216,14 @@ class VoiceIdentityService:
         n: int = 3,
         *,
         expression: str | ExpressionProfile | dict[str, Any] | None = None,
+        context: str | ContextProfile | dict[str, Any] | None = None,
         exaggeration: float | None = None,
         cfg_weight: float | None = None,
     ) -> tuple[str, float]:
         identity = self.repository.get(identity_id)
         embedding_path = self.repository.resolve_path(identity, identity.embedding_path)
         ref_embedding = self._load_cached_embedding(identity, embedding_path)
-        profile = resolve_expression(expression)
+        plan = self.resolve_render_plan(expression, context)
 
         from ..similarity import compare_with_embedding
 
@@ -195,7 +232,8 @@ class VoiceIdentityService:
             path = self.synthesize(
                 identity_id,
                 text,
-                expression=profile,
+                expression=plan.base_expression,
+                context=plan.context,
                 exaggeration=exaggeration,
                 cfg_weight=cfg_weight,
                 save_metadata=False,
@@ -215,7 +253,7 @@ class VoiceIdentityService:
             except OSError:
                 pass
 
-        self._write_render_metadata(identity, profile, best_path, similarity=best_score)
+        self._write_render_metadata(identity, plan, best_path, similarity=best_score)
         return best_path, best_score
 
     def benchmark(
@@ -224,6 +262,7 @@ class VoiceIdentityService:
         sentences: list[str] | None = None,
         csv_path: str | Path | None = None,
         expression: str | ExpressionProfile | dict[str, Any] | None = None,
+        contexts: list[str | ContextProfile | dict[str, Any] | None] | None = None,
     ) -> dict:
         from ..benchmarking import run_benchmark
 
@@ -231,34 +270,79 @@ class VoiceIdentityService:
         processed = self.repository.resolve_path(identity, identity.processed_audio)
         embedding_path = self.repository.resolve_path(identity, identity.embedding_path)
         ref_embedding = self._load_cached_embedding(identity, embedding_path)
-        profile = resolve_expression(expression)
-        settings = map_expression_to_chatterbox(profile)
 
-        return run_benchmark(
-            processed_audio=str(processed),
-            reference_embedding=ref_embedding,
-            sentences=sentences,
-            csv_path=csv_path,
-            output_dir=self.repository.output_dir(identity_id),
-            render_kwargs={
-                "exaggeration": settings.exaggeration,
-                "cfg_weight": settings.cfg_weight,
-            },
-        )
+        context_list = contexts if contexts is not None else [None]
+        if len(context_list) == 1:
+            plan = self.resolve_render_plan(expression, context_list[0])
+            settings = map_expression_to_chatterbox(plan.resolved_expression)
+            return run_benchmark(
+                processed_audio=str(processed),
+                reference_embedding=ref_embedding,
+                sentences=sentences,
+                csv_path=csv_path,
+                output_dir=self.repository.output_dir(identity_id),
+                render_kwargs={
+                    "exaggeration": settings.exaggeration,
+                    "cfg_weight": settings.cfg_weight,
+                },
+                context_label=plan.context.versioned_name,
+                base_expression_label=plan.base_expression.versioned_name,
+                resolved_expression_label=plan.resolved_expression.versioned_name,
+            )
+
+        summaries = []
+        for ctx in context_list:
+            plan = self.resolve_render_plan(expression, ctx)
+            settings = map_expression_to_chatterbox(plan.resolved_expression)
+            out_csv = None
+            if csv_path is not None:
+                stem = Path(csv_path).stem
+                suffix = plan.context.name
+                out_csv = Path(csv_path).with_name(f"{stem}_{suffix}{Path(csv_path).suffix}")
+            result = run_benchmark(
+                processed_audio=str(processed),
+                reference_embedding=ref_embedding,
+                sentences=sentences,
+                csv_path=out_csv,
+                output_dir=self.repository.output_dir(identity_id),
+                render_kwargs={
+                    "exaggeration": settings.exaggeration,
+                    "cfg_weight": settings.cfg_weight,
+                },
+                context_label=plan.context.versioned_name,
+                base_expression_label=plan.base_expression.versioned_name,
+                resolved_expression_label=plan.resolved_expression.versioned_name,
+            )
+            summaries.append({"context": plan.context.versioned_name, **result})
+        return {"contexts": summaries}
 
     def _write_render_metadata(
         self,
         identity: VoiceIdentity,
-        profile: ExpressionProfile,
+        plan: ContextResolutionResult,
         audio_path: str,
         similarity: float | None = None,
     ) -> None:
+        profile = plan.resolved_expression
         settings = map_expression_to_chatterbox(profile)
         try:
             from ..audio_utils import audio_info
             duration = audio_info(audio_path)["duration_seconds"]
         except Exception:
             duration = None
+
+        extra: dict[str, Any] = {
+            "base_expression_name": plan.base_expression.versioned_name,
+            "base_expression_profile": plan.base_expression.to_dict(),
+            "context_name": plan.context.versioned_name,
+            "context_version": plan.context.version,
+            "context_profile": plan.context.to_dict(),
+            "resolved_expression_name": plan.resolved_expression.versioned_name,
+            "context_policy_version": plan.policy_version,
+            "applied_context_rules": list(plan.applied_rules),
+        }
+        if self._debug_context:
+            extra["context_resolution"] = plan.to_dict()
 
         save_render_metadata(
             audio_path,
@@ -270,6 +354,7 @@ class VoiceIdentityService:
             generation_parameters=settings.to_dict(),
             similarity=similarity,
             duration_seconds=duration,
+            extra=extra,
         )
 
     def _finalize_staged(self, staged) -> VoiceIdentity:

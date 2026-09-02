@@ -47,3 +47,11 @@ class InvalidExpression(VoiceCloneError):
 
 class UnknownExpressionPreset(VoiceCloneError):
     """Raised when a named expression preset is not found."""
+
+
+class InvalidContext(VoiceCloneError):
+    """Raised when context profile data is invalid."""
+
+
+class UnknownContextPreset(VoiceCloneError):
+    """Raised when a named context preset is not found."""

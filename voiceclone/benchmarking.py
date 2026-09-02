@@ -64,6 +64,10 @@ def run_benchmark(
     csv_path=None,
     output_dir: Path | None = None,
     render_kwargs: dict | None = None,
+    *,
+    context_label: str | None = None,
+    base_expression_label: str | None = None,
+    resolved_expression_label: str | None = None,
 ) -> dict:
     """Run benchmark against a processed reference path."""
     ensure_directories()
@@ -104,7 +108,7 @@ def run_benchmark(
         if wer is not None:
             wers.append(wer)
 
-        rows.append({
+        row = {
             "idx": i,
             "text": text,
             "output": out,
@@ -112,7 +116,14 @@ def run_benchmark(
             "wer": round(wer, 4) if wer is not None else "",
             "transcript": transcript or "",
             "gen_time_s": gen_time,
-        })
+        }
+        if context_label is not None:
+            row["context"] = context_label
+        if base_expression_label is not None:
+            row["base_expression"] = base_expression_label
+        if resolved_expression_label is not None:
+            row["resolved_expression"] = resolved_expression_label
+        rows.append(row)
 
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))

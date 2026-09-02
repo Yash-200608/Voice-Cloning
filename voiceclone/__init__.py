@@ -2,6 +2,8 @@ from .audio_utils import preprocess_reference, normalize_loudness
 from .text_utils import normalize_text
 from .core.models import VoiceIdentity
 from .core.expression import ExpressionProfile, list_expression_presets, get_expression_preset, resolve_expression
+from .core.context import ContextProfile, list_context_presets, get_context_preset, resolve_context
+from .core.context_resolver import ContextResolutionResult, resolve_expression_with_context
 from .core.service import VoiceIdentityService
 from .core.exceptions import (
     VoiceCloneError,
@@ -15,6 +17,8 @@ from .core.exceptions import (
     VoiceRenderError,
     InvalidExpression,
     UnknownExpressionPreset,
+    InvalidContext,
+    UnknownContextPreset,
 )
 
 
@@ -69,4 +73,12 @@ __all__ = [
     "resolve_expression",
     "InvalidExpression",
     "UnknownExpressionPreset",
+    "ContextProfile",
+    "list_context_presets",
+    "get_context_preset",
+    "resolve_context",
+    "ContextResolutionResult",
+    "resolve_expression_with_context",
+    "InvalidContext",
+    "UnknownContextPreset",
 ]
