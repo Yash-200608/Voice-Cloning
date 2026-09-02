@@ -7,7 +7,7 @@ from pathlib import Path
 from voiceclone.core.service import VoiceIdentityService
 from voiceclone.core.expression import ExpressionProfile, merge_expression
 from voiceclone.core.exceptions import VoiceCloneError, VoiceIdentityNotFound
-from voiceclone.evaluation.render_metadata import metadata_path_for_audio
+from voiceclone.evaluation.render_metadata import metadata_path_for_audio, load_render_metadata
 from voiceclone.performance import start_timer, stop_timer, cpu_usage
 
 logger = logging.getLogger(__name__)
@@ -18,6 +18,8 @@ _selected_id: str | None = None
 
 PRESET_OPTIONS = ["neutral"] + [p for p in service.list_expression_presets() if p != "neutral"]
 PRESET_OPTIONS.append("custom")
+
+CONTEXT_OPTIONS = service.list_context_presets()
 
 
 def _ui(fn, *args, **kwargs):
@@ -62,6 +64,22 @@ def _build_expression():
     base = service.get_expression_preset("neutral")
     overrides = {name: var.get() for name, var in custom_vars.items()}
     return merge_expression(base, {**overrides, "name": "custom"})
+
+
+def _build_context():
+    return context_picker.get() or "default"
+
+
+def _preview_resolution():
+    try:
+        expression = _build_expression()
+        context = _build_context()
+        plan = service.resolve_render_plan(expression, context)
+        resolution_label.config(text=plan.summary())
+    except VoiceCloneError as e:
+        resolution_label.config(text=e.user_message)
+    except Exception:
+        resolution_label.config(text="")
 
 
 def refresh_voices(select_name: str | None = None):
@@ -129,6 +147,7 @@ def on_generate():
 
     identity_id = _voice_map[name]
     expression = _build_expression()
+    context = _build_context()
     generate_btn.config(state=tk.DISABLED)
     _ui(result_label.config, text="Generating speech...")
 
@@ -137,19 +156,31 @@ def on_generate():
             start = start_timer()
             if best_of_var.get():
                 output, score = service.synthesize_best_of(
-                    identity_id, text, n=3, expression=expression,
+                    identity_id, text, n=3, expression=expression, context=context,
                 )
             else:
-                output = service.synthesize(identity_id, text, expression=expression)
+                output = service.synthesize(
+                    identity_id, text, expression=expression, context=context,
+                )
                 score = service.compare(identity_id, output)
             elapsed = stop_timer(start)
             expr_label = expression if isinstance(expression, str) else expression.versioned_name
             meta = metadata_path_for_audio(output)
             meta_note = "metadata saved" if meta.exists() else "no metadata"
+            resolution_text = ""
+            if meta.exists():
+                meta_data = load_render_metadata(output)
+                base_expr = meta_data.get("base_expression_name", expr_label)
+                resolved = meta_data.get("resolved_expression_name", expr_label)
+                ctx_name = meta_data.get("context_name", context)
+                resolution_text = (
+                    f"Context: {ctx_name} | Base: {base_expr} | Resolved: {resolved}\n"
+                )
             _ui(
                 result_label.config,
                 text=(
                     f"Done — {output}\n"
+                    f"{resolution_text}"
                     f"Expression: {expr_label} | {meta_note}\n"
                     f"Time: {elapsed}s | Similarity: {score:.3f} | CPU: {cpu_usage()}%"
                 ),
@@ -230,7 +261,7 @@ def on_delete():
 
 app = tk.Tk()
 app.title("Voice Clone AI")
-app.geometry("520x680")
+app.geometry("520x760")
 
 frame = tk.Frame(app, padx=12, pady=12)
 frame.pack(fill=tk.BOTH, expand=True)
@@ -257,7 +288,6 @@ tk.Label(frame, text="Expression:").pack(anchor="w", pady=(8, 0))
 expression_picker = ttk.Combobox(frame, state="readonly", width=40, values=PRESET_OPTIONS)
 expression_picker.pack(fill=tk.X, pady=4)
 expression_picker.set("neutral")
-expression_picker.bind("<<ComboboxSelected>>", _toggle_custom_controls)
 
 custom_frame = tk.LabelFrame(frame, text="Custom Expression", padx=8, pady=6)
 custom_frame.pack(fill=tk.X, pady=4)
@@ -273,6 +303,17 @@ for dim in ("energy", "warmth", "seriousness", "confidence", "urgency", "speakin
     scale.pack(side=tk.LEFT, fill=tk.X, expand=True)
     scale.config(state=tk.DISABLED)
     custom_scales[dim] = scale
+
+tk.Label(frame, text="Context:").pack(anchor="w", pady=(8, 0))
+context_picker = ttk.Combobox(frame, state="readonly", width=40, values=CONTEXT_OPTIONS)
+context_picker.pack(fill=tk.X, pady=4)
+context_picker.set("default")
+context_picker.bind("<<ComboboxSelected>>", lambda *_: _preview_resolution())
+
+resolution_label = tk.Label(frame, text="", justify=tk.LEFT, anchor="w", wraplength=480, fg="#444")
+resolution_label.pack(fill=tk.X, pady=2)
+_preview_resolution()
+expression_picker.bind("<<ComboboxSelected>>", lambda e: (_toggle_custom_controls(e), _preview_resolution()))
 
 tk.Label(frame, text="Text to speak:").pack(anchor="w", pady=(8, 0))
 text_input = tk.Text(frame, height=4, width=50, wrap=tk.WORD)

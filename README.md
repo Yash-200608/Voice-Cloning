@@ -4,6 +4,7 @@ Voice Clone AI is an offline Python desktop application for cloning voices from 
 
 - **Phase 1 — Voice Identity:** persistent `VoiceIdentity` objects with stable IDs
 - **Phase 2 — Expressive Voice:** control *how* an identity speaks via structured expression profiles
+- **Phase 3 — Context-Aware Voice:** adapt delivery to *situation* via structured context profiles
 
 ## Voice Identity (Phase 1)
 
@@ -28,6 +29,20 @@ VoiceIdentity + text + ExpressionProfile → VoiceRenderer → Chatterbox → au
 Built-in presets: `neutral`, `calm`, `warm`, `friendly`, `professional`, `serious`, `excited`, `concerned`, `urgent`.
 
 See [docs/architecture/expressive-voice.md](docs/architecture/expressive-voice.md) for full architecture details.
+
+## Context-Aware Voice (Phase 3)
+
+**Voice Identity = who is speaking.** **Expression = how the identity is speaking.** **Context = the situation in which the identity is speaking.**
+
+The same identity can adapt delivery for desktop, car, noisy environments, presentations, and warnings — without creating new identities.
+
+```
+VoiceIdentity + text + Expression + Context → ContextResolver → VoiceRenderer → audio
+```
+
+Built-in context presets: `default`, `desktop`, `phone`, `car`, `noisy_environment`, `quiet_environment`, `presentation`, `notification`, `warning`.
+
+See [docs/architecture/context-aware-voice.md](docs/architecture/context-aware-voice.md) for resolution policy and metadata details.
 
 ## Storage Layout
 
@@ -67,6 +82,7 @@ python main.py
 
 - **Record** or **Import** to create a voice identity
 - Select a voice, choose an **Expression** preset (or custom sliders)
+- Choose a **Context** preset (default, desktop, car, noisy, etc.)
 - Enter text, optionally enable **Best-of-3**
 - View identity info (name, ID, duration, embedding status, renderer)
 - **Delete** removes the identity directory safely
@@ -101,6 +117,18 @@ best_path, best_score = service.synthesize_best_of(
     identity.id, "Higher quality.", n=3, expression="excited",
 )
 
+# Context-aware synthesis
+output = service.synthesize(identity.id, "Please be careful.", context="car")
+
+# Expression + context
+output = service.synthesize(
+    identity.id, "Good morning.", expression="warm", context="desktop",
+)
+
+# Inspect resolution
+plan = service.resolve_render_plan(expression="calm", context="car")
+print(plan.summary())
+
 # Rename (ID unchanged)
 service.rename_identity(identity.id, "My Voice")
 
@@ -130,7 +158,9 @@ apps/dashboard.py          → VoiceIdentityService (GUI)
 voiceclone/core/
   models.py                → VoiceIdentity
   expression.py            → ExpressionProfile, presets
-  service.py                 → VoiceIdentityService
+  context.py               → ContextProfile, presets
+  context_resolver.py      → Context → Expression policy
+  service.py               → VoiceIdentityService
   exceptions.py            → Domain errors
 voiceclone/identity/
   repository.py            → Persistence
@@ -169,6 +199,18 @@ Run expressive evaluation (requires identity ID):
 
 ```bash
 python scripts/evaluate_expressions.py --identity-id voice_<uuid>
+```
+
+Run the Phase 3 context-aware voice gate:
+
+```bash
+python scripts/smoke_context.py
+```
+
+Run context evaluation (requires identity ID):
+
+```bash
+python scripts/evaluate_context.py --identity-id voice_<uuid>
 ```
 
 ## Migration Behavior
