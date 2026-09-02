@@ -5,7 +5,9 @@ import threading
 from pathlib import Path
 
 from voiceclone.core.service import VoiceIdentityService
+from voiceclone.core.expression import ExpressionProfile, merge_expression
 from voiceclone.core.exceptions import VoiceCloneError, VoiceIdentityNotFound
+from voiceclone.evaluation.render_metadata import metadata_path_for_audio
 from voiceclone.performance import start_timer, stop_timer, cpu_usage
 
 logger = logging.getLogger(__name__)
@@ -13,6 +15,9 @@ logger = logging.getLogger(__name__)
 service = VoiceIdentityService()
 _voice_map: dict[str, str] = {}
 _selected_id: str | None = None
+
+PRESET_OPTIONS = ["neutral"] + [p for p in service.list_expression_presets() if p != "neutral"]
+PRESET_OPTIONS.append("custom")
 
 
 def _ui(fn, *args, **kwargs):
@@ -42,6 +47,21 @@ def _update_identity_panel(identity_id: str | None):
         identity_info.config(text=_format_identity_info(identity))
     except VoiceIdentityNotFound:
         identity_info.config(text="Voice not found. Refresh the list.")
+
+
+def _toggle_custom_controls(*_args):
+    state = tk.NORMAL if expression_picker.get() == "custom" else tk.DISABLED
+    for scale in custom_scales.values():
+        scale.config(state=state)
+
+
+def _build_expression():
+    preset = expression_picker.get()
+    if preset != "custom":
+        return preset
+    base = service.get_expression_preset("neutral")
+    overrides = {name: var.get() for name, var in custom_vars.items()}
+    return merge_expression(base, {**overrides, "name": "custom"})
 
 
 def refresh_voices(select_name: str | None = None):
@@ -108,6 +128,7 @@ def on_generate():
         return
 
     identity_id = _voice_map[name]
+    expression = _build_expression()
     generate_btn.config(state=tk.DISABLED)
     _ui(result_label.config, text="Generating speech...")
 
@@ -115,14 +136,23 @@ def on_generate():
         try:
             start = start_timer()
             if best_of_var.get():
-                output, score = service.synthesize_best_of(identity_id, text, n=3)
+                output, score = service.synthesize_best_of(
+                    identity_id, text, n=3, expression=expression,
+                )
             else:
-                output = service.synthesize(identity_id, text)
+                output = service.synthesize(identity_id, text, expression=expression)
                 score = service.compare(identity_id, output)
             elapsed = stop_timer(start)
+            expr_label = expression if isinstance(expression, str) else expression.versioned_name
+            meta = metadata_path_for_audio(output)
+            meta_note = "metadata saved" if meta.exists() else "no metadata"
             _ui(
                 result_label.config,
-                text=f"Done — {output}\nTime: {elapsed}s | Similarity: {score:.3f} | CPU: {cpu_usage()}%",
+                text=(
+                    f"Done — {output}\n"
+                    f"Expression: {expr_label} | {meta_note}\n"
+                    f"Time: {elapsed}s | Similarity: {score:.3f} | CPU: {cpu_usage()}%"
+                ),
             )
         except VoiceCloneError as e:
             _ui(result_label.config, text=e.user_message)
@@ -200,7 +230,7 @@ def on_delete():
 
 app = tk.Tk()
 app.title("Voice Clone AI")
-app.geometry("520x520")
+app.geometry("520x680")
 
 frame = tk.Frame(app, padx=12, pady=12)
 frame.pack(fill=tk.BOTH, expand=True)
@@ -222,6 +252,27 @@ delete_btn.pack(side=tk.LEFT, padx=4)
 tk.Label(frame, text="Identity Info:").pack(anchor="w", pady=(8, 0))
 identity_info = tk.Label(frame, text="", justify=tk.LEFT, anchor="w", wraplength=480)
 identity_info.pack(fill=tk.X, pady=2)
+
+tk.Label(frame, text="Expression:").pack(anchor="w", pady=(8, 0))
+expression_picker = ttk.Combobox(frame, state="readonly", width=40, values=PRESET_OPTIONS)
+expression_picker.pack(fill=tk.X, pady=4)
+expression_picker.set("neutral")
+expression_picker.bind("<<ComboboxSelected>>", _toggle_custom_controls)
+
+custom_frame = tk.LabelFrame(frame, text="Custom Expression", padx=8, pady=6)
+custom_frame.pack(fill=tk.X, pady=4)
+custom_vars: dict[str, tk.DoubleVar] = {}
+custom_scales: dict[str, tk.Scale] = {}
+for dim in ("energy", "warmth", "seriousness", "confidence", "urgency", "speaking_rate"):
+    row = tk.Frame(custom_frame)
+    row.pack(fill=tk.X, pady=2)
+    tk.Label(row, text=dim.replace("_", " ").title(), width=14, anchor="w").pack(side=tk.LEFT)
+    var = tk.DoubleVar(value=0.5)
+    custom_vars[dim] = var
+    scale = tk.Scale(row, from_=0.0, to=1.0, resolution=0.05, orient=tk.HORIZONTAL, variable=var, length=280)
+    scale.pack(side=tk.LEFT, fill=tk.X, expand=True)
+    scale.config(state=tk.DISABLED)
+    custom_scales[dim] = scale
 
 tk.Label(frame, text="Text to speak:").pack(anchor="w", pady=(8, 0))
 text_input = tk.Text(frame, height=4, width=50, wrap=tk.WORD)

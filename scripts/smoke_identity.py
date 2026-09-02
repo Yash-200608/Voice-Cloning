@@ -241,11 +241,14 @@ def main() -> int:
 
     # Step 15: Test suite
     try:
+        test_env = os.environ.copy()
+        test_env.pop("VOICECLONE_HOME", None)
         proc = subprocess.run(
             [sys.executable, "-m", "pytest", "-v"],
             cwd=Path(__file__).resolve().parents[1],
             capture_output=True,
             text=True,
+            env=test_env,
         )
         if proc.returncode == 0:
             results.append(_status(15, "PASS", "pytest -v exit code 0"))

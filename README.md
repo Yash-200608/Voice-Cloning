@@ -1,8 +1,11 @@
 # Voice Clone — Persistent Voice Identity Engine
 
-Voice Clone AI is an offline Python desktop application for cloning voices from short audio samples and generating text-to-speech. **Phase 1** introduces **persistent Voice Identities** — stable, ID-based voice profiles that survive application restarts.
+Voice Clone AI is an offline Python desktop application for cloning voices from short audio samples and generating text-to-speech.
 
-## Voice Identity Concept
+- **Phase 1 — Voice Identity:** persistent `VoiceIdentity` objects with stable IDs
+- **Phase 2 — Expressive Voice:** control *how* an identity speaks via structured expression profiles
+
+## Voice Identity (Phase 1)
 
 A voice is no longer just a WAV file. Each voice is a **VoiceIdentity** with:
 
@@ -12,9 +15,19 @@ A voice is no longer just a WAV file. Each voice is a **VoiceIdentity** with:
 - Versioned **metadata** (`schema_version: 1`)
 - Chatterbox renderer provenance
 
+## Expressive Voice (Phase 2)
+
+**Voice Identity = who is speaking.** **Expression = how the identity is speaking.**
+
+The same identity can deliver the same text in different expressive styles (calm, warm, professional, excited, etc.) without creating new identities.
+
 ```
-VoiceIdentity + text → VoiceRenderer → Chatterbox → audio
+VoiceIdentity + text + ExpressionProfile → VoiceRenderer → Chatterbox → audio
 ```
+
+Built-in presets: `neutral`, `calm`, `warm`, `friendly`, `professional`, `serious`, `excited`, `concerned`, `urgent`.
+
+See [docs/architecture/expressive-voice.md](docs/architecture/expressive-voice.md) for full architecture details.
 
 ## Storage Layout
 
@@ -53,7 +66,8 @@ python main.py
 ```
 
 - **Record** or **Import** to create a voice identity
-- Select a voice, enter text, optionally enable **Best-of-3**
+- Select a voice, choose an **Expression** preset (or custom sliders)
+- Enter text, optionally enable **Best-of-3**
 - View identity info (name, ID, duration, embedding status, renderer)
 - **Delete** removes the identity directory safely
 
@@ -71,12 +85,21 @@ identity = service.create_from_file("Yash", "/path/to/reference.wav")
 for i in service.list_identities():
     print(i.id, i.name)
 
-# Synthesize
+# Synthesize (neutral default)
 output = service.synthesize(identity.id, "Hello, this is my voice.")
-score = service.compare(identity.id, output)
 
-# Best-of-3
-best_path, best_score = service.synthesize_best_of(identity.id, "Higher quality.", n=3)
+# Synthesize with expression preset
+output = service.synthesize(identity.id, "Hello.", expression="calm")
+
+# Custom expression profile
+from voiceclone import ExpressionProfile
+profile = ExpressionProfile(name="custom", energy=0.8, warmth=0.7)
+output = service.synthesize(identity.id, "Hello.", expression=profile)
+
+# Best-of-3 with expression
+best_path, best_score = service.synthesize_best_of(
+    identity.id, "Higher quality.", n=3, expression="excited",
+)
 
 # Rename (ID unchanged)
 service.rename_identity(identity.id, "My Voice")
@@ -106,7 +129,8 @@ score = compare(ref, out)
 apps/dashboard.py          → VoiceIdentityService (GUI)
 voiceclone/core/
   models.py                → VoiceIdentity
-  service.py               → VoiceIdentityService
+  expression.py            → ExpressionProfile, presets
+  service.py                 → VoiceIdentityService
   exceptions.py            → Domain errors
 voiceclone/identity/
   repository.py            → Persistence
@@ -114,6 +138,9 @@ voiceclone/identity/
   embeddings.py            → Cached Resemblyzer embeddings
 voiceclone/inference/
   renderer.py              → ChatterboxRenderer
+  chatterbox_mapping.py    → Expression → Chatterbox settings
+voiceclone/evaluation/
+  render_metadata.py       → Generation event metadata
 voiceclone/compatibility/
   legacy.py                → Flat WAV migration
 voiceclone/benchmarking.py → Batch eval (similarity + optional WER)
@@ -126,10 +153,22 @@ voiceclone/cloner.py       → Chatterbox TTS (unchanged core)
 pytest -v
 ```
 
-Run the Phase 1 completion gate smoke test:
+Run the Phase 1 completion gate:
 
 ```bash
 python scripts/smoke_identity.py
+```
+
+Run the Phase 2 expressive voice gate:
+
+```bash
+python scripts/smoke_expressive.py
+```
+
+Run expressive evaluation (requires identity ID):
+
+```bash
+python scripts/evaluate_expressions.py --identity-id voice_<uuid>
 ```
 
 ## Migration Behavior
