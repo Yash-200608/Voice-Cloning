@@ -1,11 +1,12 @@
 import csv
 import time
 import statistics
+import uuid
 from pathlib import Path
 
 from .cloner import clone
-from .similarity import compare
-from .Config import OUTPUTS_DIR
+from .similarity import compare, compare_with_embedding
+from .Config import OUTPUTS_DIR, ensure_directories
 
 DEFAULT_SENTENCES = [
     "The quick brown fox jumps over the lazy dog near the riverbank.",
@@ -56,10 +57,21 @@ def _transcribe(path):
     return " ".join(s.text for s in segments).strip()
 
 
-def benchmark(voice_file, sentences=None, csv_path=None):
+def run_benchmark(
+    processed_audio: str,
+    reference_embedding=None,
+    sentences=None,
+    csv_path=None,
+    output_dir: Path | None = None,
+) -> dict:
+    """Run benchmark against a processed reference path."""
+    ensure_directories()
     sentences = sentences or DEFAULT_SENTENCES
+    out_dir = Path(output_dir) if output_dir else OUTPUTS_DIR
+    out_dir.mkdir(parents=True, exist_ok=True)
+
     if csv_path is None:
-        csv_path = OUTPUTS_DIR / f"benchmark_{int(time.time())}.csv"
+        csv_path = out_dir / f"benchmark_{int(time.time())}.csv"
 
     rows = []
     sims = []
@@ -68,10 +80,13 @@ def benchmark(voice_file, sentences=None, csv_path=None):
 
     for i, text in enumerate(sentences):
         t0 = time.time()
-        out = clone(text, voice_file)
+        out = clone(text, processed_audio, output_path=out_dir / f"bench_{uuid.uuid4().hex[:8]}.wav")
         gen_time = round(time.time() - t0, 2)
 
-        sim = compare(voice_file, out)
+        if reference_embedding is not None:
+            sim = compare_with_embedding(reference_embedding, out)
+        else:
+            sim = compare(processed_audio, out)
 
         transcript = _transcribe(out)
         wer = _wer(text, transcript) if transcript else None
@@ -96,7 +111,7 @@ def benchmark(voice_file, sentences=None, csv_path=None):
         writer.writeheader()
         writer.writerows(rows)
 
-    summary = {
+    return {
         "n": len(sentences),
         "similarity_mean": round(statistics.mean(sims), 4),
         "similarity_std": round(statistics.stdev(sims), 4) if len(sims) > 1 else 0.0,
@@ -104,4 +119,13 @@ def benchmark(voice_file, sentences=None, csv_path=None):
         "time_mean_s": round(statistics.mean(times), 2),
         "csv": str(csv_path),
     }
-    return summary
+
+
+def benchmark(voice_file, sentences=None, csv_path=None):
+    """Compatibility API: benchmark using a voice file path."""
+    return run_benchmark(
+        processed_audio=voice_file,
+        reference_embedding=None,
+        sentences=sentences,
+        csv_path=csv_path,
+    )

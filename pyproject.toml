@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "voiceclone"
-version = "0.1.0"
-description = "Personal offline voice cloning library"
+version = "0.2.0"
+description = "Persistent Artificial Voice Identity Engine"
 requires-python = ">=3.10,<3.13"
 dependencies = [
     "chatterbox-tts>=0.1.1",
@@ -22,5 +22,17 @@ dependencies = [
     "faster-whisper>=1.0.0",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-mock>=3.12",
+]
+
 [tool.setuptools.packages.find]
 include = ["voiceclone*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: requires Chatterbox/Resemblyzer model weights",
+]
