@@ -63,6 +63,7 @@ def run_benchmark(
     sentences=None,
     csv_path=None,
     output_dir: Path | None = None,
+    render_kwargs: dict | None = None,
 ) -> dict:
     """Run benchmark against a processed reference path."""
     ensure_directories()
@@ -78,9 +79,16 @@ def run_benchmark(
     wers = []
     times = []
 
+    render_kwargs = render_kwargs or {}
+
     for i, text in enumerate(sentences):
         t0 = time.time()
-        out = clone(text, processed_audio, output_path=out_dir / f"bench_{uuid.uuid4().hex[:8]}.wav")
+        out = clone(
+            text,
+            processed_audio,
+            output_path=out_dir / f"bench_{uuid.uuid4().hex[:8]}.wav",
+            **render_kwargs,
+        )
         gen_time = round(time.time() - t0, 2)
 
         if reference_embedding is not None:

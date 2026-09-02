@@ -88,7 +88,7 @@ def service(voiceclone_home, mock_renderer, mock_embedding, monkeypatch):
     monkeypatch.setattr(EmbeddingStore, "validate", fake_validate)
 
     def fake_compare_with_embedding(ref_embedding, generated_path):
-        return float(np.dot(ref_embedding, mock_embedding))
+        return float(np.clip(np.dot(ref_embedding, mock_embedding), -1.0, 1.0))
 
     monkeypatch.setattr(
         "voiceclone.similarity.compare_with_embedding",

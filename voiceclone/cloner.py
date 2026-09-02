@@ -46,6 +46,25 @@ def clone(text, voice_file, output_path=None, exaggeration=0.5, cfg_weight=0.5, 
     return str(output_path)
 
 
+def synthesize_with_settings(
+    text,
+    voice_file,
+    output_path=None,
+    exaggeration=0.5,
+    cfg_weight=0.5,
+    normalize=True,
+):
+    """Generate speech with explicit renderer settings (used by ChatterboxRenderer)."""
+    return clone(
+        text,
+        voice_file,
+        output_path=output_path,
+        exaggeration=exaggeration,
+        cfg_weight=cfg_weight,
+        normalize=normalize,
+    )
+
+
 def clone_best_of(text, voice_file, n=3, exaggeration=0.5, cfg_weight=0.5):
     from .similarity import compare
 

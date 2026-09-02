@@ -39,3 +39,11 @@ class UnsupportedIdentityVersion(VoiceCloneError):
 
 class VoiceRenderError(VoiceCloneError):
     """Raised when speech synthesis fails."""
+
+
+class InvalidExpression(VoiceCloneError):
+    """Raised when expression profile data is invalid."""
+
+
+class UnknownExpressionPreset(VoiceCloneError):
+    """Raised when a named expression preset is not found."""
