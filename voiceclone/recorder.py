@@ -1,14 +1,23 @@
-import sounddevice as sd
-import numpy as np
+"""Audio capture and import primitives."""
+
 from pathlib import Path
+import shutil
 import tempfile
 
-from .Config import VOICES_DIR, SAMPLE_RATE, REFERENCE_SECONDS
-from .audio_utils import save_audio, preprocess_reference, load_audio
+from .Config import SAMPLE_RATE, REFERENCE_SECONDS, ensure_directories
+from .audio_utils import save_audio, load_audio
 
 
-def record(name, duration=REFERENCE_SECONDS, sr=SAMPLE_RATE, preprocess=True):
-    path = VOICES_DIR / f"{name}.wav"
+def capture_to_path(
+    output_path: Path,
+    duration: float = REFERENCE_SECONDS,
+    sr: int = SAMPLE_RATE,
+) -> str:
+    """Record audio from microphone to a destination path (raw reference)."""
+    import sounddevice as sd
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
 
     try:
         audio = sd.rec(int(duration * sr), samplerate=sr, channels=1, dtype="float32")
@@ -20,33 +29,30 @@ def record(name, duration=REFERENCE_SECONDS, sr=SAMPLE_RATE, preprocess=True):
         )
 
     audio = audio.flatten().astype(np.float32)
-    save_audio(path, audio, sr)
-
-    if preprocess:
-        preprocess_reference(path, out_path=path)
-
-    return str(path)
+    save_audio(output_path, audio, sr)
+    return str(output_path)
 
 
-def import_reference(name, source_path, preprocess=True):
+def import_to_path(source_path: Path, output_path: Path, sr: int = SAMPLE_RATE) -> str:
+    """
+    Import audio/video source to a raw reference WAV without preprocessing.
+
+    The source file is never modified.
+    """
     source = Path(source_path)
+    output_path = Path(output_path)
     if not source.exists():
         raise FileNotFoundError(f"Reference file not found: {source}")
 
-    target = VOICES_DIR / f"{name}.wav"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     suffix = source.suffix.lower()
     audio_exts = {".wav", ".flac", ".ogg", ".mp3", ".m4a", ".aac", ".wma"}
 
     if suffix in audio_exts:
-        if preprocess:
-            preprocess_reference(source, out_path=target, max_seconds=REFERENCE_SECONDS)
-        else:
-            audio, sr = load_audio(source, sr=SAMPLE_RATE)
-            max_samples = int(REFERENCE_SECONDS * sr)
-            save_audio(target, audio[:max_samples], sr)
-        return str(target)
+        audio, file_sr = load_audio(source, sr=sr)
+        save_audio(output_path, audio, file_sr)
+        return str(output_path)
 
-    # For video/unknown containers, extract mono wav first then preprocess.
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
         extracted = Path(tmp.name)
     try:
@@ -62,7 +68,7 @@ def import_reference(name, source_path, preprocess=True):
             (
                 ffmpeg
                 .input(str(source))
-                .output(str(extracted), ac=1, ar=SAMPLE_RATE, format="wav")
+                .output(str(extracted), ac=1, ar=sr, format="wav")
                 .overwrite_output()
                 .run(quiet=True)
             )
@@ -74,10 +80,30 @@ def import_reference(name, source_path, preprocess=True):
                 f"{details}"
             ) from e
 
-        preprocess_reference(extracted, out_path=target, max_seconds=REFERENCE_SECONDS)
-        return str(target)
+        shutil.copy2(extracted, output_path)
+        return str(output_path)
     finally:
         try:
             extracted.unlink(missing_ok=True)
         except OSError:
             pass
+
+
+def record(name, duration=REFERENCE_SECONDS, sr=SAMPLE_RATE, preprocess=True):
+    """Compatibility API: record and create a voice identity."""
+    from .core.service import VoiceIdentityService
+
+    ensure_directories()
+    service = VoiceIdentityService()
+    identity = service.create_from_recording(name, duration=duration, sr=sr)
+    return str(service.repository.resolve_path(identity, identity.processed_audio))
+
+
+def import_reference(name, source_path, preprocess=True):
+    """Compatibility API: import and create a voice identity."""
+    from .core.service import VoiceIdentityService
+
+    ensure_directories()
+    service = VoiceIdentityService()
+    identity = service.create_from_file(name, source_path)
+    return str(service.repository.resolve_path(identity, identity.processed_audio))

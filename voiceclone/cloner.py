@@ -1,7 +1,7 @@
 import uuid
 from pathlib import Path
 
-from .Config import OUTPUTS_DIR, SAMPLE_RATE, DEVICE
+from .Config import OUTPUTS_DIR, DEVICE, ensure_directories
 from .audio_utils import save_audio, normalize_loudness, load_audio
 from .text_utils import normalize_text
 
@@ -20,6 +20,8 @@ def _get_model():
 def clone(text, voice_file, output_path=None, exaggeration=0.5, cfg_weight=0.5, normalize=True):
     if not Path(voice_file).exists():
         raise FileNotFoundError(f"Voice file not found: {voice_file}")
+
+    ensure_directories()
 
     text = normalize_text(text)
     model = _get_model()

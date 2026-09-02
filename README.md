@@ -1,71 +1,146 @@
-# Voice Clone
+# Voice Clone — Persistent Voice Identity Engine
 
-Voice Clone AI is a powerful offline desktop application built in Python that allows you to clone voices from short audio samples and generate realistic text-to-speech. Whether you want to record your own voice directly through the app or import audio/video files to use as references, Voice Clone AI handles it seamlessly.
+Voice Clone AI is an offline Python desktop application for cloning voices from short audio samples and generating text-to-speech. **Phase 1** introduces **persistent Voice Identities** — stable, ID-based voice profiles that survive application restarts.
 
-## 🚀 Features
+## Voice Identity Concept
 
-- **Direct Voice Recording**: Quickly record a 12-second voice sample straight from your microphone to use as a cloning reference.
-- **Media Import**: Import reference voices from various audio and video formats (WAV, MP3, M4A, MP4, MKV, etc.). The app automatically processes and extracts the audio.
-- **Text-to-Speech Generation**: Type any text and generate speech using your selected cloned voice.
-- **"Best-of-3" Quality Option**: A toggle that generates three versions of the audio and automatically selects the highest quality one using similarity scoring.
-- **Performance Metrics**: View the generation time, CPU usage, and voice similarity score after each generation.
-- **Simple Desktop UI**: An intuitive graphical interface built with Tkinter, making it easy to manage your voice profiles.
+A voice is no longer just a WAV file. Each voice is a **VoiceIdentity** with:
 
-## 📁 Project Structure
+- Stable ID (`voice_<uuid4>`) — survives renames
+- Separate **raw** and **processed** reference audio
+- Cached **Resemblyzer** speaker embedding
+- Versioned **metadata** (`schema_version: 1`)
+- Chatterbox renderer provenance
 
 ```
-VoiceCloning/
-├── main.py                 # The main entry point for the application.
-├── apps/
-│   └── dashboard.py        # The Tkinter GUI dashboard and UI logic.
-├── voiceclone/             # The core logic package
-│   ├── __init__.py
-│   ├── audio_utils.py      # Utilities for preprocessing and normalizing audio.
-│   ├── benchmark.py        # Performance benchmarking.
-│   ├── cloner.py           # Core text-to-speech cloning logic.
-│   ├── recorder.py         # Handles microphone recording and media imports.
-│   ├── similarity.py       # Compares cloned audio to the original reference.
-│   ├── text_utils.py       # Text normalization utilities.
-│   └── voices.py           # Manages saved voice profiles.
-└── .gitignore              # Configured to ignore Python caches, envs, and itself.
+VoiceIdentity + text → VoiceRenderer → Chatterbox → audio
 ```
 
-## 🛠️ Installation
+## Storage Layout
 
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/Yash-200608/Voice-Cloning.git
-   cd Voice-Cloning
-   ```
+```text
+~/.voiceclone/                    (or $VOICECLONE_HOME)
+├── voices/
+│   ├── voice_<uuid>/
+│   │   ├── metadata.json
+│   │   ├── raw/reference.wav
+│   │   ├── processed/reference.wav
+│   │   └── embeddings/speaker.npy
+│   └── LegacyName.wav            (legacy flat files, preserved after migration)
+├── outputs/
+│   └── voice_<uuid>/             (generated audio per identity)
+└── cache/
+```
 
-2. **Set up a virtual environment (Optional but recommended):**
-   ```bash
-   python -m venv venv
-   # On Windows:
-   .\venv\Scripts\activate
-   # On macOS/Linux:
-   source venv/bin/activate
-   ```
+## Installation
 
-3. **Install Dependencies:**
-   Make sure you have all required dependencies installed for audio processing and TTS generation. 
-   *(Note: Since no `requirements.txt` is currently provided, ensure you have the necessary backend TTS libraries and PyAudio/SoundFile depending on the `voiceclone` package requirements).*
+```bash
+git clone https://github.com/Yash-200608/Voice-Cloning.git
+cd Voice-Cloning
+python -m venv venv
+source venv/bin/activate          # Windows: .\venv\Scripts\activate
+pip install -e ".[dev]"
+```
 
-## 💻 Usage
+**Requirements:** Python 3.10–3.12, ffmpeg (for video import), microphone/PortAudio (for recording). First Chatterbox run downloads model weights from Hugging Face.
 
-To launch the Voice Clone AI dashboard, run the main script from the root directory:
+## Usage
+
+### Desktop GUI
 
 ```bash
 python main.py
 ```
 
-### Navigating the App:
-1. **Add a Voice**: Click **Record New Voice** to use your microphone, or **Import Reference File** to load an existing recording.
-2. **Select a Voice**: Choose your newly added voice from the dropdown menu.
-3. **Generate Speech**: Enter the text you want the cloned voice to say.
-4. **Best-of-3**: Check the "Best-of-3" box if you want the highest possible quality (this takes slightly longer).
-5. **Click "Generate Speech"**: The result will be saved, and performance metrics will be displayed at the bottom.
+- **Record** or **Import** to create a voice identity
+- Select a voice, enter text, optionally enable **Best-of-3**
+- View identity info (name, ID, duration, embedding status, renderer)
+- **Delete** removes the identity directory safely
 
-## 🤝 Contributing
+### Python API
 
-Contributions, issues, and feature requests are welcome! Feel free to check the issues page.
+```python
+from voiceclone import VoiceIdentityService
+
+service = VoiceIdentityService()
+
+# Create from file
+identity = service.create_from_file("Yash", "/path/to/reference.wav")
+
+# List / get
+for i in service.list_identities():
+    print(i.id, i.name)
+
+# Synthesize
+output = service.synthesize(identity.id, "Hello, this is my voice.")
+score = service.compare(identity.id, output)
+
+# Best-of-3
+best_path, best_score = service.synthesize_best_of(identity.id, "Higher quality.", n=3)
+
+# Rename (ID unchanged)
+service.rename_identity(identity.id, "My Voice")
+
+# Delete
+service.delete_identity(identity.id)
+```
+
+### Legacy Compatibility
+
+Flat `.wav` files in `voices/` are **lazily migrated** on first `list_identities()` call. The original `.wav` is never deleted or modified during migration.
+
+Path-based APIs still work:
+
+```python
+from voiceclone import list_voices, voice_path, clone, compare, benchmark
+
+names = list_voices()
+ref = voice_path(names[0])
+out = clone("Hello.", ref)
+score = compare(ref, out)
+```
+
+## Architecture
+
+```text
+apps/dashboard.py          → VoiceIdentityService (GUI)
+voiceclone/core/
+  models.py                → VoiceIdentity
+  service.py               → VoiceIdentityService
+  exceptions.py            → Domain errors
+voiceclone/identity/
+  repository.py            → Persistence
+  metadata.py              → JSON schema
+  embeddings.py            → Cached Resemblyzer embeddings
+voiceclone/inference/
+  renderer.py              → ChatterboxRenderer
+voiceclone/compatibility/
+  legacy.py                → Flat WAV migration
+voiceclone/benchmarking.py → Batch eval (similarity + optional WER)
+voiceclone/cloner.py       → Chatterbox TTS (unchanged core)
+```
+
+## Tests
+
+```bash
+pytest -v
+```
+
+Run the Phase 1 completion gate smoke test:
+
+```bash
+python scripts/smoke_identity.py
+```
+
+## Migration Behavior
+
+| Legacy | Phase 1 |
+|--------|---------|
+| `voices/Yash.wav` | `voices/voice_<uuid>/` with metadata |
+| Name = filename | Name in metadata; ID stable |
+| In-place preprocessing | Raw + processed separate |
+| Re-embed every compare | Cached `speaker.npy` |
+
+## License
+
+See repository for license details.

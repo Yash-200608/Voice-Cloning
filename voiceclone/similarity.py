@@ -20,8 +20,16 @@ def embed(audio_path):
     return encoder.embed_utterance(wav)
 
 
+def compare_with_embedding(reference_embedding: np.ndarray, generated_path: str | Path) -> float:
+    """Compare a precomputed reference embedding against generated audio."""
+    e2 = embed(str(generated_path))
+    similarity = float(
+        np.dot(reference_embedding, e2)
+        / (np.linalg.norm(reference_embedding) * np.linalg.norm(e2))
+    )
+    return float(np.clip(similarity, -1.0, 1.0))
+
+
 def compare(reference, generated):
     e1 = embed(reference)
-    e2 = embed(generated)
-    similarity = float(np.dot(e1, e2) / (np.linalg.norm(e1) * np.linalg.norm(e2)))
-    return similarity
+    return compare_with_embedding(e1, generated)
