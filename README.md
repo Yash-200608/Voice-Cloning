@@ -5,6 +5,7 @@ Voice Clone AI is an offline Python desktop application for cloning voices from 
 - **Phase 1 — Voice Identity:** persistent `VoiceIdentity` objects with stable IDs
 - **Phase 2 — Expressive Voice:** control *how* an identity speaks via structured expression profiles
 - **Phase 3 — Context-Aware Voice:** adapt delivery to *situation* via structured context profiles
+- **Phase 4 — Voice Memory:** remember pronunciation and vocal preferences per identity
 
 ## Voice Identity (Phase 1)
 
@@ -44,6 +45,26 @@ Built-in context presets: `default`, `desktop`, `phone`, `car`, `noisy_environme
 
 See [docs/architecture/context-aware-voice.md](docs/architecture/context-aware-voice.md) for resolution policy and metadata details.
 
+
+## Voice Memory (Phase 4)
+
+**Voice Identity = who.** **Expression = how.** **Context = current situation.** **Memory = what has been remembered about vocal interaction.**
+
+```text
+VoiceIdentity + Memory + Expression + Context → MemoryResolver → ContextResolver → Renderer → audio
+```
+
+Supported memory types: pronunciation/name/vocabulary, style preferences, delivery preferences.
+
+```python
+service.add_pronunciation_memory(identity.id, "Minitorch", "mini-torch")
+service.add_style_preference(identity.id, "speaking_rate", 0.65)
+service.synthesize(identity.id, "Minitorch is ready.", use_memory=True)
+service.synthesize(identity.id, "Minitorch is ready.", use_memory=False)  # bypass
+```
+
+See [docs/architecture/voice-memory.md](docs/architecture/voice-memory.md).
+
 ## Storage Layout
 
 ```text
@@ -53,7 +74,8 @@ See [docs/architecture/context-aware-voice.md](docs/architecture/context-aware-v
 │   │   ├── metadata.json
 │   │   ├── raw/reference.wav
 │   │   ├── processed/reference.wav
-│   │   └── embeddings/speaker.npy
+│   │   ├── embeddings/speaker.npy
+│   │   └── memory/memories.json
 │   └── LegacyName.wav            (legacy flat files, preserved after migration)
 ├── outputs/
 │   └── voice_<uuid>/             (generated audio per identity)
@@ -126,7 +148,7 @@ output = service.synthesize(
 )
 
 # Inspect resolution
-plan = service.resolve_render_plan(expression="calm", context="car")
+plan = service.resolve_render_plan(expression="calm", context="car")  # memory optional via identity_id/text
 print(plan.summary())
 
 # Rename (ID unchanged)
@@ -205,6 +227,12 @@ Run the Phase 3 context-aware voice gate:
 
 ```bash
 python scripts/smoke_context.py
+
+Run the Phase 4 voice memory gate:
+
+```bash
+python scripts/smoke_memory.py
+```
 ```
 
 Run context evaluation (requires identity ID):

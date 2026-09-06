@@ -70,16 +70,166 @@ def _build_context():
     return context_picker.get() or "default"
 
 
+def _selected_identity_id() -> str | None:
+    name = voice_picker.get()
+    return _voice_map.get(name)
+
+
 def _preview_resolution():
     try:
+        identity_id = _selected_identity_id()
+        if not identity_id:
+            resolution_label.config(text="")
+            return
         expression = _build_expression()
         context = _build_context()
-        plan = service.resolve_render_plan(expression, context)
+        sample = text_input.get("1.0", tk.END).strip() or "Preview."
+        plan = service.resolve_render_plan(
+            expression,
+            context,
+            identity_id=identity_id,
+            text=sample,
+            use_memory=use_memory_var.get(),
+        )
         resolution_label.config(text=plan.summary())
     except VoiceCloneError as e:
         resolution_label.config(text=e.user_message)
     except Exception:
         resolution_label.config(text="")
+
+
+def _refresh_memory_list(listbox: tk.Listbox, identity_id: str):
+    listbox.delete(0, tk.END)
+    for item in service.list_memories(identity_id):
+        status = "on" if item.enabled else "off"
+        listbox.insert(
+            tk.END,
+            f"[{status}] {item.category}: {item.key} (v{item.version}, conf={item.confidence:.2f})",
+        )
+
+
+def on_manage_memory():
+    identity_id = _selected_identity_id()
+    if not identity_id:
+        messagebox.showinfo("Voice Memory", "Select a voice identity first.", parent=app)
+        return
+
+    identity = service.get_identity(identity_id)
+    win = tk.Toplevel(app)
+    win.title(f"Voice Memory — {identity.name}")
+    win.geometry("540x420")
+
+    tk.Label(win, text=f"Memories for {identity.name}").pack(anchor="w", padx=8, pady=6)
+    mem_list = tk.Listbox(win, height=12, width=72)
+    mem_list.pack(fill=tk.BOTH, expand=True, padx=8, pady=4)
+    _refresh_memory_list(mem_list, identity_id)
+
+    btn_row = tk.Frame(win)
+    btn_row.pack(fill=tk.X, padx=8, pady=6)
+
+    def _selected_memory_id():
+        selection = mem_list.curselection()
+        if not selection:
+            return None
+        items = service.list_memories(identity_id)
+        if selection[0] >= len(items):
+            return None
+        return items[selection[0]].id
+
+    def _add_pronunciation():
+        term = simpledialog.askstring("Term", "Word or phrase:", parent=win)
+        if not term:
+            return
+        spoken = simpledialog.askstring("Pronunciation", "Preferred spoken form:", parent=win)
+        if not spoken:
+            return
+        try:
+            service.add_pronunciation_memory(identity_id, term, spoken)
+            _refresh_memory_list(mem_list, identity_id)
+            _preview_resolution()
+        except VoiceCloneError as e:
+            messagebox.showerror("Error", e.user_message, parent=win)
+
+    def _add_style():
+        dim = simpledialog.askstring(
+            "Style preference",
+            "Dimension (e.g. speaking_rate):",
+            parent=win,
+        )
+        if not dim:
+            return
+        pref = simpledialog.askfloat(
+            "Preference",
+            "Value between 0.0 and 1.0:",
+            minvalue=0.0,
+            maxvalue=1.0,
+            parent=win,
+        )
+        if pref is None:
+            return
+        try:
+            service.add_style_preference(identity_id, dim, pref)
+            _refresh_memory_list(mem_list, identity_id)
+            _preview_resolution()
+        except VoiceCloneError as e:
+            messagebox.showerror("Error", e.user_message, parent=win)
+
+    def _toggle_enabled():
+        memory_id = _selected_memory_id()
+        if not memory_id:
+            messagebox.showinfo("Voice Memory", "Select a memory item.", parent=win)
+            return
+        try:
+            item = service.get_memory(identity_id, memory_id)
+            if item.enabled:
+                service.disable_memory(identity_id, memory_id)
+            else:
+                service.enable_memory(identity_id, memory_id)
+            _refresh_memory_list(mem_list, identity_id)
+            _preview_resolution()
+        except VoiceCloneError as e:
+            messagebox.showerror("Error", e.user_message, parent=win)
+
+    def _delete_memory():
+        memory_id = _selected_memory_id()
+        if not memory_id:
+            messagebox.showinfo("Voice Memory", "Select a memory item.", parent=win)
+            return
+        if not messagebox.askyesno("Delete memory", "Delete selected memory?", parent=win):
+            return
+        try:
+            service.delete_memory(identity_id, memory_id)
+            _refresh_memory_list(mem_list, identity_id)
+            _preview_resolution()
+        except VoiceCloneError as e:
+            messagebox.showerror("Error", e.user_message, parent=win)
+
+    def _inspect():
+        memory_id = _selected_memory_id()
+        if not memory_id:
+            messagebox.showinfo("Voice Memory", "Select a memory item.", parent=win)
+            return
+        item = service.get_memory(identity_id, memory_id)
+        messagebox.showinfo(
+            "Memory details",
+            (
+                f"Type: {item.category}\n"
+                f"Key: {item.key}\n"
+                f"Value: {item.value}\n"
+                f"Confidence: {item.confidence}\n"
+                f"Source: {item.source}\n"
+                f"Enabled: {item.enabled}\n"
+                f"Version: {item.version}\n"
+                f"Updated: {item.updated_at}"
+            ),
+            parent=win,
+        )
+
+    tk.Button(btn_row, text="Add Pronunciation", command=_add_pronunciation).pack(side=tk.LEFT, padx=2)
+    tk.Button(btn_row, text="Add Style Pref", command=_add_style).pack(side=tk.LEFT, padx=2)
+    tk.Button(btn_row, text="Enable/Disable", command=_toggle_enabled).pack(side=tk.LEFT, padx=2)
+    tk.Button(btn_row, text="Inspect", command=_inspect).pack(side=tk.LEFT, padx=2)
+    tk.Button(btn_row, text="Delete", command=_delete_memory).pack(side=tk.LEFT, padx=2)
 
 
 def refresh_voices(select_name: str | None = None):
@@ -148,6 +298,7 @@ def on_generate():
     identity_id = _voice_map[name]
     expression = _build_expression()
     context = _build_context()
+    use_memory = use_memory_var.get()
     generate_btn.config(state=tk.DISABLED)
     _ui(result_label.config, text="Generating speech...")
 
@@ -156,11 +307,11 @@ def on_generate():
             start = start_timer()
             if best_of_var.get():
                 output, score = service.synthesize_best_of(
-                    identity_id, text, n=3, expression=expression, context=context,
+                    identity_id, text, n=3, expression=expression, context=context, use_memory=use_memory,
                 )
             else:
                 output = service.synthesize(
-                    identity_id, text, expression=expression, context=context,
+                    identity_id, text, expression=expression, context=context, use_memory=use_memory,
                 )
                 score = service.compare(identity_id, output)
             elapsed = stop_timer(start)
@@ -173,8 +324,9 @@ def on_generate():
                 base_expr = meta_data.get("base_expression_name", expr_label)
                 resolved = meta_data.get("resolved_expression_name", expr_label)
                 ctx_name = meta_data.get("context_name", context)
+                mem_count = len(meta_data.get("memory_items_used", []))
                 resolution_text = (
-                    f"Context: {ctx_name} | Base: {base_expr} | Resolved: {resolved}\n"
+                    f"Context: {ctx_name} | Base: {base_expr} | Resolved: {resolved} | Memory used: {mem_count}\n"
                 )
             _ui(
                 result_label.config,
@@ -261,7 +413,7 @@ def on_delete():
 
 app = tk.Tk()
 app.title("Voice Clone AI")
-app.geometry("520x760")
+app.geometry("520x820")
 
 frame = tk.Frame(app, padx=12, pady=12)
 frame.pack(fill=tk.BOTH, expand=True)
@@ -309,6 +461,15 @@ context_picker = ttk.Combobox(frame, state="readonly", width=40, values=CONTEXT_
 context_picker.pack(fill=tk.X, pady=4)
 context_picker.set("default")
 context_picker.bind("<<ComboboxSelected>>", lambda *_: _preview_resolution())
+
+memory_row = tk.Frame(frame)
+memory_row.pack(fill=tk.X, pady=4)
+tk.Label(memory_row, text="Voice Memory:").pack(side=tk.LEFT)
+tk.Button(memory_row, text="Manage", command=on_manage_memory).pack(side=tk.LEFT, padx=8)
+use_memory_var = tk.BooleanVar(value=True)
+tk.Checkbutton(
+    memory_row, text="Use memory", variable=use_memory_var, command=_preview_resolution
+).pack(side=tk.LEFT)
 
 resolution_label = tk.Label(frame, text="", justify=tk.LEFT, anchor="w", wraplength=480, fg="#444")
 resolution_label.pack(fill=tk.X, pady=2)

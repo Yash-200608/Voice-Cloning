@@ -4,6 +4,12 @@ from .core.models import VoiceIdentity
 from .core.expression import ExpressionProfile, list_expression_presets, get_expression_preset, resolve_expression
 from .core.context import ContextProfile, list_context_presets, get_context_preset, resolve_context
 from .core.context_resolver import ContextResolutionResult, resolve_expression_with_context
+from .memory import (
+    VoiceMemoryItem,
+    VoiceMemoryService,
+    VoiceMemoryResolver,
+    FullRenderPlan,
+)
 from .core.service import VoiceIdentityService
 from .core.exceptions import (
     VoiceCloneError,
@@ -19,6 +25,9 @@ from .core.exceptions import (
     UnknownExpressionPreset,
     InvalidContext,
     UnknownContextPreset,
+    InvalidVoiceMemory,
+    VoiceMemoryNotFound,
+    VoiceMemoryStoreError,
 )
 
 
@@ -81,4 +90,11 @@ __all__ = [
     "resolve_expression_with_context",
     "InvalidContext",
     "UnknownContextPreset",
+    "VoiceMemoryItem",
+    "VoiceMemoryService",
+    "VoiceMemoryResolver",
+    "FullRenderPlan",
+    "InvalidVoiceMemory",
+    "VoiceMemoryNotFound",
+    "VoiceMemoryStoreError",
 ]

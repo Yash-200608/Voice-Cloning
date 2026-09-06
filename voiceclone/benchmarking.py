@@ -65,9 +65,14 @@ def run_benchmark(
     output_dir: Path | None = None,
     render_kwargs: dict | None = None,
     *,
+    synthesize_fn=None,
     context_label: str | None = None,
     base_expression_label: str | None = None,
     resolved_expression_label: str | None = None,
+    memory_label: str | None = None,
+    use_memory: bool | None = None,
+    memories_consulted: int | None = None,
+    memory_resolution_time_ms: float | None = None,
 ) -> dict:
     """Run benchmark against a processed reference path."""
     ensure_directories()
@@ -87,12 +92,15 @@ def run_benchmark(
 
     for i, text in enumerate(sentences):
         t0 = time.time()
-        out = clone(
-            text,
-            processed_audio,
-            output_path=out_dir / f"bench_{uuid.uuid4().hex[:8]}.wav",
-            **render_kwargs,
-        )
+        if synthesize_fn is not None:
+            out = synthesize_fn(text)
+        else:
+            out = clone(
+                text,
+                processed_audio,
+                output_path=out_dir / f"bench_{uuid.uuid4().hex[:8]}.wav",
+                **render_kwargs,
+            )
         gen_time = round(time.time() - t0, 2)
 
         if reference_embedding is not None:
@@ -123,6 +131,14 @@ def run_benchmark(
             row["base_expression"] = base_expression_label
         if resolved_expression_label is not None:
             row["resolved_expression"] = resolved_expression_label
+        if memory_label is not None:
+            row["memory"] = memory_label
+        if use_memory is not None:
+            row["use_memory"] = use_memory
+        if memories_consulted is not None:
+            row["memories_consulted"] = memories_consulted
+        if memory_resolution_time_ms is not None:
+            row["memory_resolution_time_ms"] = memory_resolution_time_ms
         rows.append(row)
 
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
@@ -130,7 +146,7 @@ def run_benchmark(
         writer.writeheader()
         writer.writerows(rows)
 
-    return {
+    summary = {
         "n": len(sentences),
         "similarity_mean": round(statistics.mean(sims), 4),
         "similarity_std": round(statistics.stdev(sims), 4) if len(sims) > 1 else 0.0,
@@ -138,6 +154,11 @@ def run_benchmark(
         "time_mean_s": round(statistics.mean(times), 2),
         "csv": str(csv_path),
     }
+    if memories_consulted is not None:
+        summary["memories_consulted"] = memories_consulted
+    if memory_resolution_time_ms is not None:
+        summary["memory_resolution_time_ms"] = memory_resolution_time_ms
+    return summary
 
 
 def benchmark(voice_file, sentences=None, csv_path=None):

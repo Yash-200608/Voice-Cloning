@@ -55,3 +55,16 @@ class InvalidContext(VoiceCloneError):
 
 class UnknownContextPreset(VoiceCloneError):
     """Raised when a named context preset is not found."""
+
+
+class InvalidVoiceMemory(VoiceCloneError):
+    """Raised when voice memory data is invalid."""
+
+
+class VoiceMemoryNotFound(VoiceCloneError):
+    """Raised when a voice memory item cannot be found."""
+
+
+class VoiceMemoryStoreError(VoiceCloneError):
+    """Raised when voice memory persistence fails."""
+

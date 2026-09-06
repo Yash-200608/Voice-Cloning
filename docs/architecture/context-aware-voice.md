@@ -116,7 +116,7 @@ service.synthesize(
 )
 
 # Inspect resolution plan
-plan = service.resolve_render_plan(expression="calm", context="car")
+plan = service.resolve_render_plan(expression="calm", context="car")  # memory optional via identity_id/text
 print(plan.summary())
 ```
 

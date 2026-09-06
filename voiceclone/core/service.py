@@ -40,6 +40,8 @@ from ..identity.embeddings import EmbeddingStore, get_embedding_version
 from ..identity.repository import VoiceRepository, get_renderer_version
 from ..inference.chatterbox_mapping import map_expression_to_chatterbox
 from ..inference.renderer import ChatterboxRenderer, VoiceRenderer
+from ..memory.resolver import FullRenderPlan, VoiceMemoryResolver
+from ..memory.service import VoiceMemoryService
 from ..recorder import capture_to_path, import_to_path
 
 logger = logging.getLogger(__name__)
@@ -53,17 +55,23 @@ class VoiceIdentityService:
         repository: VoiceRepository | None = None,
         renderer: VoiceRenderer | None = None,
         embedding_store: EmbeddingStore | None = None,
+        memory_service: VoiceMemoryService | None = None,
         *,
         auto_migrate: bool = True,
         context_resolver: ContextResolver | None = None,
+        memory_resolver: VoiceMemoryResolver | None = None,
         debug_context: bool = False,
+        debug_memory: bool = False,
     ):
         self.repository = repository or VoiceRepository()
         self.embedding_store = embedding_store or self.repository.embedding_store
         self.renderer = renderer or ChatterboxRenderer()
+        self.memory = memory_service or VoiceMemoryService(voice_repository=self.repository)
         self._auto_migrate = auto_migrate
         self._context_resolver = context_resolver or ContextResolver()
+        self._memory_resolver = memory_resolver or VoiceMemoryResolver(self._context_resolver)
         self._debug_context = debug_context
+        self._debug_memory = debug_memory
         if auto_migrate:
             migrate_legacy_voices(self.repository)
 
@@ -94,15 +102,63 @@ class VoiceIdentityService:
         self,
         expression: str | ExpressionProfile | dict[str, Any] | None = None,
         context: str | ContextProfile | dict[str, Any] | None = None,
-    ) -> ContextResolutionResult:
-        """Resolve base expression and apply contextual adjustments."""
+        *,
+        identity_id: str | None = None,
+        text: str = "",
+        use_memory: bool = True,
+    ) -> FullRenderPlan:
+        """Resolve memory, expression, and context into a full rendering plan.
+
+        Phase 3 callers that omit identity_id/text continue to work: memory is
+        skipped and pronunciation leaves normalized text unchanged.
+        """
+        expression_explicit = expression is not None
         base = resolve_expression(expression)
         ctx = resolve_context(context)
-        return resolve_expression_with_context(
+        memories = []
+        if use_memory and identity_id:
+            memories = self.memory.resolve_memories(identity_id)
+        return self._memory_resolver.resolve_full(
+            text,
             base,
             ctx,
-            resolver=self._context_resolver,
+            memories,
+            use_memory=use_memory and bool(identity_id),
+            expression_explicit=expression_explicit,
         )
+
+    def add_memory(self, identity_id: str, category: str, key: str, value: dict[str, Any], **kwargs):
+        return self.memory.add_memory(identity_id, category, key, value, **kwargs)
+
+    def add_pronunciation_memory(self, identity_id: str, term: str, pronunciation_value: str, **kwargs):
+        return self.memory.add_pronunciation_memory(identity_id, term, pronunciation_value, **kwargs)
+
+    def add_style_preference(self, identity_id: str, dimension: str, preference: float, **kwargs):
+        return self.memory.add_style_preference(identity_id, dimension, preference, **kwargs)
+
+    def list_memories(self, identity_id: str, *, enabled_only: bool = False):
+        return self.memory.list_memories(identity_id, enabled_only=enabled_only)
+
+    def get_memory(self, identity_id: str, memory_id: str):
+        return self.memory.get_memory(identity_id, memory_id)
+
+    def update_memory(self, identity_id: str, memory_id: str, **kwargs):
+        return self.memory.update_memory(identity_id, memory_id, **kwargs)
+
+    def delete_memory(self, identity_id: str, memory_id: str) -> bool:
+        return self.memory.delete_memory(identity_id, memory_id)
+
+    def enable_memory(self, identity_id: str, memory_id: str):
+        return self.memory.enable_memory(identity_id, memory_id)
+
+    def disable_memory(self, identity_id: str, memory_id: str):
+        return self.memory.disable_memory(identity_id, memory_id)
+
+    def export_memories(self, identity_id: str) -> dict[str, Any]:
+        return self.memory.export_memories(identity_id)
+
+    def import_memories(self, identity_id: str, payload: dict[str, Any], *, replace: bool = False):
+        return self.memory.import_memories(identity_id, payload, replace=replace)
 
     def create_from_recording(
         self,
@@ -154,6 +210,7 @@ class VoiceIdentityService:
         *,
         expression: str | ExpressionProfile | dict[str, Any] | None = None,
         context: str | ContextProfile | dict[str, Any] | None = None,
+        use_memory: bool = True,
         exaggeration: float | None = None,
         cfg_weight: float | None = None,
         save_metadata: bool = True,
@@ -166,7 +223,13 @@ class VoiceIdentityService:
                 user_message="Reference audio is missing for this voice identity.",
             )
 
-        plan = self.resolve_render_plan(expression, context)
+        plan = self.resolve_render_plan(
+            expression,
+            context,
+            identity_id=identity_id,
+            text=text,
+            use_memory=use_memory,
+        )
 
         if output_path is None:
             out_dir = self.repository.output_dir(identity_id)
@@ -175,7 +238,7 @@ class VoiceIdentityService:
 
         try:
             result = self.renderer.synthesize(
-                text,
+                plan.render_text,
                 processed,
                 output_path,
                 expression=plan.resolved_expression,
@@ -189,7 +252,7 @@ class VoiceIdentityService:
             ) from e
 
         if save_metadata:
-            self._write_render_metadata(identity, plan, result)
+            self._write_render_metadata(identity, plan, result, use_memory=use_memory)
         return result
 
     def compare(self, identity_id: str, generated_audio: str | Path) -> float:
@@ -217,13 +280,20 @@ class VoiceIdentityService:
         *,
         expression: str | ExpressionProfile | dict[str, Any] | None = None,
         context: str | ContextProfile | dict[str, Any] | None = None,
+        use_memory: bool = True,
         exaggeration: float | None = None,
         cfg_weight: float | None = None,
     ) -> tuple[str, float]:
         identity = self.repository.get(identity_id)
         embedding_path = self.repository.resolve_path(identity, identity.embedding_path)
         ref_embedding = self._load_cached_embedding(identity, embedding_path)
-        plan = self.resolve_render_plan(expression, context)
+        plan = self.resolve_render_plan(
+            expression,
+            context,
+            identity_id=identity_id,
+            text=text,
+            use_memory=use_memory,
+        )
 
         from ..similarity import compare_with_embedding
 
@@ -232,8 +302,9 @@ class VoiceIdentityService:
             path = self.synthesize(
                 identity_id,
                 text,
-                expression=plan.base_expression,
-                context=plan.context,
+                expression=expression,
+                context=context,
+                use_memory=use_memory,
                 exaggeration=exaggeration,
                 cfg_weight=cfg_weight,
                 save_metadata=False,
@@ -253,7 +324,9 @@ class VoiceIdentityService:
             except OSError:
                 pass
 
-        self._write_render_metadata(identity, plan, best_path, similarity=best_score)
+        self._write_render_metadata(
+            identity, plan, best_path, similarity=best_score, use_memory=use_memory
+        )
         return best_path, best_score
 
     def benchmark(
@@ -263,6 +336,9 @@ class VoiceIdentityService:
         csv_path: str | Path | None = None,
         expression: str | ExpressionProfile | dict[str, Any] | None = None,
         contexts: list[str | ContextProfile | dict[str, Any] | None] | None = None,
+        *,
+        use_memory: bool = True,
+        compare_memory: bool = False,
     ) -> dict:
         from ..benchmarking import run_benchmark
 
@@ -270,48 +346,83 @@ class VoiceIdentityService:
         processed = self.repository.resolve_path(identity, identity.processed_audio)
         embedding_path = self.repository.resolve_path(identity, identity.embedding_path)
         ref_embedding = self._load_cached_embedding(identity, embedding_path)
+        sample = (sentences or ["Benchmark sentence."])[0]
 
-        context_list = contexts if contexts is not None else [None]
-        if len(context_list) == 1:
-            plan = self.resolve_render_plan(expression, context_list[0])
-            settings = map_expression_to_chatterbox(plan.resolved_expression)
-            return run_benchmark(
-                processed_audio=str(processed),
-                reference_embedding=ref_embedding,
-                sentences=sentences,
-                csv_path=csv_path,
-                output_dir=self.repository.output_dir(identity_id),
-                render_kwargs={
-                    "exaggeration": settings.exaggeration,
-                    "cfg_weight": settings.cfg_weight,
-                },
-                context_label=plan.context.versioned_name,
-                base_expression_label=plan.base_expression.versioned_name,
-                resolved_expression_label=plan.resolved_expression.versioned_name,
+        def _run(enabled: bool, context, out_csv, label: str) -> dict:
+            plan = self.resolve_render_plan(
+                expression,
+                context,
+                identity_id=identity_id,
+                text=sample,
+                use_memory=enabled,
             )
-
-        summaries = []
-        for ctx in context_list:
-            plan = self.resolve_render_plan(expression, ctx)
             settings = map_expression_to_chatterbox(plan.resolved_expression)
-            out_csv = None
-            if csv_path is not None:
-                stem = Path(csv_path).stem
-                suffix = plan.context.name
-                out_csv = Path(csv_path).with_name(f"{stem}_{suffix}{Path(csv_path).suffix}")
-            result = run_benchmark(
+
+            def synthesize_fn(text: str) -> str:
+                return self.synthesize(
+                    identity_id,
+                    text,
+                    expression=expression,
+                    context=context,
+                    use_memory=enabled,
+                    save_metadata=False,
+                )
+
+            return run_benchmark(
                 processed_audio=str(processed),
                 reference_embedding=ref_embedding,
                 sentences=sentences,
                 csv_path=out_csv,
                 output_dir=self.repository.output_dir(identity_id),
-                render_kwargs={
-                    "exaggeration": settings.exaggeration,
-                    "cfg_weight": settings.cfg_weight,
-                },
+                synthesize_fn=synthesize_fn,
                 context_label=plan.context.versioned_name,
                 base_expression_label=plan.base_expression.versioned_name,
                 resolved_expression_label=plan.resolved_expression.versioned_name,
+                memory_label=label,
+                use_memory=enabled,
+                memories_consulted=len(plan.memory.memories_consulted),
+                memory_resolution_time_ms=plan.memory.resolution_time_ms,
+            )
+
+        if compare_memory:
+            results = {}
+            for label, enabled in (("memory_disabled", False), ("memory_enabled", True)):
+                out_csv = None
+                if csv_path is not None:
+                    out_csv = Path(csv_path).with_name(
+                        f"{Path(csv_path).stem}_{label}{Path(csv_path).suffix}"
+                    )
+                results[label] = _run(enabled, None, out_csv, label)
+            return results
+
+        context_list = contexts if contexts is not None else [None]
+        if len(context_list) == 1:
+            return _run(
+                use_memory,
+                context_list[0],
+                csv_path,
+                "enabled" if use_memory else "disabled",
+            )
+
+        summaries = []
+        for ctx in context_list:
+            plan = self.resolve_render_plan(
+                expression,
+                ctx,
+                identity_id=identity_id,
+                text=sample,
+                use_memory=use_memory,
+            )
+            out_csv = None
+            if csv_path is not None:
+                stem = Path(csv_path).stem
+                suffix = plan.context.name
+                out_csv = Path(csv_path).with_name(f"{stem}_{suffix}{Path(csv_path).suffix}")
+            result = _run(
+                use_memory,
+                ctx,
+                out_csv,
+                "enabled" if use_memory else "disabled",
             )
             summaries.append({"context": plan.context.versioned_name, **result})
         return {"contexts": summaries}
@@ -319,9 +430,11 @@ class VoiceIdentityService:
     def _write_render_metadata(
         self,
         identity: VoiceIdentity,
-        plan: ContextResolutionResult,
+        plan: FullRenderPlan,
         audio_path: str,
         similarity: float | None = None,
+        *,
+        use_memory: bool = True,
     ) -> None:
         profile = plan.resolved_expression
         settings = map_expression_to_chatterbox(profile)
@@ -340,9 +453,17 @@ class VoiceIdentityService:
             "resolved_expression_name": plan.resolved_expression.versioned_name,
             "context_policy_version": plan.policy_version,
             "applied_context_rules": list(plan.applied_rules),
+            "memory_items_used": list(plan.memory.memories_applied),
+            "memory_items_consulted": list(plan.memory.memories_consulted),
+            "memory_resolution_version": plan.memory.policy_version,
+            "memory_resolution_time_ms": plan.memory.resolution_time_ms,
+            "use_memory": use_memory,
+            "render_text": plan.render_text,
         }
         if self._debug_context:
-            extra["context_resolution"] = plan.to_dict()
+            extra["context_resolution"] = plan.context_result.to_dict()
+        if self._debug_memory:
+            extra["memory_resolution"] = plan.memory.to_dict()
 
         save_render_metadata(
             audio_path,
