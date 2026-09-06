@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 service = VoiceIdentityService()
 _voice_map: dict[str, str] = {}
+_active_realtime_session: str | None = None
 _selected_id: str | None = None
 
 PRESET_OPTIONS = ["neutral"] + [p for p in service.list_expression_presets() if p != "neutral"]
@@ -284,7 +285,59 @@ def on_record():
     threading.Thread(target=_run, daemon=True).start()
 
 
+def _set_realtime_status(state: str) -> None:
+    realtime_status_var.set(f"Real-time: {state}")
+
+
+def _toggle_realtime_controls(*_args) -> None:
+    if realtime_var.get():
+        best_of_check.config(state=tk.DISABLED)
+        best_of_var.set(False)
+        _set_realtime_status("Ready")
+    else:
+        best_of_check.config(state=tk.NORMAL)
+        stop_btn.config(state=tk.DISABLED)
+        _set_realtime_status("Off")
+
+
+def on_stop_realtime():
+    global _active_realtime_session
+    session_id = _active_realtime_session
+    if not session_id:
+        return
+    stop_btn.config(state=tk.DISABLED)
+
+    def _run():
+        try:
+            session = service.interrupt_realtime(session_id)
+            session = service.wait_realtime(session_id, timeout=30)
+            metrics = session.metrics.to_dict()
+            _ui(_set_realtime_status, session.state.value.title())
+            _ui(
+                result_label.config,
+                text=(
+                    f"Interrupted — state={session.state.value}\n"
+                    f"Mode: {service.realtime.streaming_mode()} | chunks={metrics.get('chunk_count')}\n"
+                    f"TTFA: {metrics.get('ttfa_ms')} ms | cancel: {metrics.get('cancel_latency_ms')} ms"
+                ),
+            )
+        except VoiceCloneError as e:
+            _ui(result_label.config, text=e.user_message)
+            _ui(_set_realtime_status, "Error")
+        except Exception as e:
+            logger.exception("Realtime stop failed")
+            _ui(result_label.config, text=f"Stop error: {e}")
+            _ui(_set_realtime_status, "Error")
+        finally:
+            global _active_realtime_session
+            _active_realtime_session = None
+            _ui(generate_btn.config, state=tk.NORMAL)
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
 def on_generate():
+    global _active_realtime_session
     text = text_input.get("1.0", tk.END).strip()
     if not text:
         _ui(result_label.config, text="Please enter text.")
@@ -300,6 +353,73 @@ def on_generate():
     context = _build_context()
     use_memory = use_memory_var.get()
     generate_btn.config(state=tk.DISABLED)
+
+    if realtime_var.get():
+        _set_realtime_status("Preparing")
+        _ui(result_label.config, text="Starting real-time speech...")
+        stop_btn.config(state=tk.NORMAL)
+
+        def _on_event(event: str, payload: dict) -> None:
+            state_map = {
+                "session_started": "Preparing",
+                "first_audio_ready": "Generating",
+                "playback_started": "Playing",
+                "progress": "Generating",
+                "completed": "Completed",
+                "cancelled": "Cancelled",
+                "interrupted": "Cancelled",
+                "failed": "Error",
+            }
+            label = state_map.get(event)
+            if label:
+                _ui(_set_realtime_status, label)
+
+        def _run():
+            global _active_realtime_session
+            try:
+                start = start_timer()
+                session = service.synthesize_realtime(
+                    identity_id,
+                    text,
+                    expression=expression,
+                    context=context,
+                    use_memory=use_memory,
+                    play_audio=True,
+                    save_final=True,
+                    on_event=_on_event,
+                )
+                _active_realtime_session = session.session_id
+                done = service.wait_realtime(session.session_id, timeout=600)
+                elapsed = stop_timer(start)
+                metrics = done.metrics.to_dict()
+                expr_label = expression if isinstance(expression, str) else expression.versioned_name
+                output = done.final_audio_path or "(no final file)"
+                _ui(_set_realtime_status, done.state.value.title())
+                _ui(
+                    result_label.config,
+                    text=(
+                        f"Real-time {done.state.value} — {output}\n"
+                        f"Mode: {service.realtime.streaming_mode()} | Expression: {expr_label}\n"
+                        f"TTFA: {metrics.get('ttfa_ms')} ms | TTFP: {metrics.get('ttfp_ms')} ms | "
+                        f"chunks={metrics.get('chunk_count')} | RTF={metrics.get('rtf')}\n"
+                        f"Wall time: {elapsed}s | CPU: {cpu_usage()}%"
+                    ),
+                )
+            except VoiceCloneError as e:
+                _ui(result_label.config, text=e.user_message)
+                _ui(_set_realtime_status, "Error")
+            except Exception as e:
+                logger.exception("Realtime generation failed")
+                _ui(result_label.config, text=f"Error: {e}")
+                _ui(_set_realtime_status, "Error")
+            finally:
+                _active_realtime_session = None
+                _ui(generate_btn.config, state=tk.NORMAL)
+                _ui(stop_btn.config, state=tk.DISABLED)
+
+        threading.Thread(target=_run, daemon=True).start()
+        return
+
     _ui(result_label.config, text="Generating speech...")
 
     def _run():
@@ -413,7 +533,7 @@ def on_delete():
 
 app = tk.Tk()
 app.title("Voice Clone AI")
-app.geometry("520x820")
+app.geometry("520x900")
 
 frame = tk.Frame(app, padx=12, pady=12)
 frame.pack(fill=tk.BOTH, expand=True)
@@ -481,10 +601,27 @@ text_input = tk.Text(frame, height=4, width=50, wrap=tk.WORD)
 text_input.pack(fill=tk.X, pady=4)
 
 best_of_var = tk.BooleanVar(value=False)
-tk.Checkbutton(frame, text="Best-of-3 (slower, higher quality)", variable=best_of_var).pack(anchor="w")
+best_of_check = tk.Checkbutton(frame, text="Best-of-3 (slower, higher quality)", variable=best_of_var)
+best_of_check.pack(anchor="w")
 
-generate_btn = tk.Button(frame, text="Generate Speech", command=on_generate)
-generate_btn.pack(pady=8)
+realtime_var = tk.BooleanVar(value=False)
+realtime_row = tk.Frame(frame)
+realtime_row.pack(fill=tk.X, pady=2)
+tk.Checkbutton(
+    realtime_row,
+    text="Real-Time Mode (chunked playback)",
+    variable=realtime_var,
+    command=_toggle_realtime_controls,
+).pack(side=tk.LEFT)
+realtime_status_var = tk.StringVar(value="Real-time: Off")
+tk.Label(realtime_row, textvariable=realtime_status_var, fg="#444").pack(side=tk.LEFT, padx=8)
+
+btn_gen_row = tk.Frame(frame)
+btn_gen_row.pack(fill=tk.X, pady=8)
+generate_btn = tk.Button(btn_gen_row, text="Generate Speech", command=on_generate)
+generate_btn.pack(side=tk.LEFT)
+stop_btn = tk.Button(btn_gen_row, text="Stop / Interrupt", command=on_stop_realtime, state=tk.DISABLED)
+stop_btn.pack(side=tk.LEFT, padx=8)
 
 result_label = tk.Label(frame, text="", wraplength=480, justify="left")
 result_label.pack(pady=8, fill=tk.X)

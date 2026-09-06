@@ -11,6 +11,7 @@ from .memory import (
     FullRenderPlan,
 )
 from .core.service import VoiceIdentityService
+from .realtime import RealTimeVoiceService, RealtimeSession, SessionState, STREAMING_MODE
 from .core.exceptions import (
     VoiceCloneError,
     VoiceIdentityNotFound,
@@ -28,6 +29,11 @@ from .core.exceptions import (
     InvalidVoiceMemory,
     VoiceMemoryNotFound,
     VoiceMemoryStoreError,
+    RealtimeSessionError,
+    PlaybackError,
+    AudioDeviceError,
+    SessionCancelledError,
+    SessionNotFound,
 )
 
 
@@ -97,4 +103,13 @@ __all__ = [
     "InvalidVoiceMemory",
     "VoiceMemoryNotFound",
     "VoiceMemoryStoreError",
+    "RealTimeVoiceService",
+    "RealtimeSession",
+    "SessionState",
+    "STREAMING_MODE",
+    "RealtimeSessionError",
+    "PlaybackError",
+    "AudioDeviceError",
+    "SessionCancelledError",
+    "SessionNotFound",
 ]

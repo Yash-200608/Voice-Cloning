@@ -6,6 +6,7 @@ Voice Clone AI is an offline Python desktop application for cloning voices from 
 - **Phase 2 — Expressive Voice:** control *how* an identity speaks via structured expression profiles
 - **Phase 3 — Context-Aware Voice:** adapt delivery to *situation* via structured context profiles
 - **Phase 4 — Voice Memory:** remember pronunciation and vocal preferences per identity
+- **Phase 5 — Real-Time Voice:** chunked generation with early playback, cancel/interrupt, and latency metrics
 
 ## Voice Identity (Phase 1)
 
@@ -64,6 +65,32 @@ service.synthesize(identity.id, "Minitorch is ready.", use_memory=False)  # bypa
 ```
 
 See [docs/architecture/voice-memory.md](docs/architecture/voice-memory.md).
+
+## Real-Time Voice (Phase 5)
+
+**Runtime = when/how audio is delivered.** Standard `synthesize()` still returns a complete WAV. Real-time mode starts playback as soon as the first speech chunk is ready.
+
+Honest capability: **chunked generation + buffered playback** (`STREAMING_MODE = "chunked_generation"`). Chatterbox does not expose native streaming in this repo.
+
+```python
+session = service.synthesize_realtime(
+    identity.id,
+    "Hello. This can start playing before the full line finishes.",
+    expression="calm",
+    context="desktop",
+    use_memory=True,
+    play_audio=True,
+    save_final=True,
+)
+done = service.wait_realtime(session.session_id)
+print(done.metrics.to_dict())  # ttfa_ms, ttfp_ms, chunk_count, rtf, ...
+service.cancel_realtime(session.session_id)  # or interrupt_realtime
+```
+
+Dashboard: enable **Real-Time Mode**, generate, use **Stop / Interrupt**. Best-of-3 is disabled while real-time is on.
+
+See [docs/architecture/realtime-voice.md](docs/architecture/realtime-voice.md).
+
 
 ## Storage Layout
 
@@ -232,6 +259,15 @@ Run the Phase 4 voice memory gate:
 
 ```bash
 python scripts/smoke_memory.py
+
+Run the Phase 5 real-time gate:
+
+```bash
+python scripts/smoke_realtime.py
+python scripts/evaluate_realtime.py --json-out /tmp/rt.json
+```
+
+scripts/smoke_memory.py
 ```
 ```
 

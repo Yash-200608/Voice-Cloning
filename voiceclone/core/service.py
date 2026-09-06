@@ -72,6 +72,7 @@ class VoiceIdentityService:
         self._memory_resolver = memory_resolver or VoiceMemoryResolver(self._context_resolver)
         self._debug_context = debug_context
         self._debug_memory = debug_memory
+        self._realtime = None
         if auto_migrate:
             migrate_legacy_voices(self.repository)
 
@@ -426,6 +427,69 @@ class VoiceIdentityService:
             )
             summaries.append({"context": plan.context.versioned_name, **result})
         return {"contexts": summaries}
+
+
+    @property
+    def realtime(self):
+        """Lazy RealTimeVoiceService bound to this identity service."""
+        if self._realtime is None:
+            from ..realtime.service import RealTimeVoiceService
+
+            self._realtime = RealTimeVoiceService(self)
+        return self._realtime
+
+    def warm_up_realtime(self) -> dict:
+        """Optionally load the TTS model for lower first-audio latency."""
+        return self.realtime.warm_up()
+
+    def synthesize_realtime(
+        self,
+        identity_id: str,
+        text: str,
+        *,
+        expression=None,
+        context=None,
+        use_memory: bool = True,
+        play_audio: bool = True,
+        save_final: bool = True,
+        output_path=None,
+        sink=None,
+        on_event=None,
+        max_chunk_chars: int = 180,
+    ):
+        """Start chunked real-time synthesis. Returns a RealtimeSession.
+
+        Standard synthesize() remains unchanged (full utterance then return path).
+        """
+        return self.realtime.start_session(
+            identity_id,
+            text,
+            expression=expression,
+            context=context,
+            use_memory=use_memory,
+            play_audio=play_audio,
+            save_final=save_final,
+            output_path=output_path,
+            sink=sink,
+            on_event=on_event,
+            max_chunk_chars=max_chunk_chars,
+        )
+
+    def wait_realtime(self, session_id: str, timeout: float | None = None):
+        """Block until a real-time session reaches a terminal state."""
+        return self.realtime.wait(session_id, timeout=timeout)
+
+    def cancel_realtime(self, session_id: str):
+        """Cancel a real-time session at the next generation boundary."""
+        return self.realtime.cancel(session_id)
+
+    def interrupt_realtime(self, session_id: str):
+        """Interrupt a real-time session (barge-in ready; same as cancel for Phase 5)."""
+        return self.realtime.interrupt(session_id)
+
+    def get_realtime_session(self, session_id: str):
+        """Look up a real-time session by ID."""
+        return self.realtime.get_session(session_id)
 
     def _write_render_metadata(
         self,

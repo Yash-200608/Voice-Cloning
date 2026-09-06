@@ -68,3 +68,31 @@ class VoiceMemoryNotFound(VoiceCloneError):
 class VoiceMemoryStoreError(VoiceCloneError):
     """Raised when voice memory persistence fails."""
 
+
+class RealtimeSessionError(VoiceCloneError):
+    """Raised when a real-time voice session fails."""
+
+
+class PlaybackError(VoiceCloneError):
+    """Raised when audio playback or chunk assembly fails."""
+
+
+class AudioDeviceError(VoiceCloneError):
+    """Raised when the local audio output device is unavailable."""
+
+
+class StreamingUnavailableError(VoiceCloneError):
+    """Raised when a requested streaming mode is not supported by the backend."""
+
+
+class SessionCancelledError(VoiceCloneError):
+    """Raised when a real-time session was cancelled or interrupted."""
+
+
+class BufferUnderrunError(VoiceCloneError):
+    """Raised when playback underruns beyond an explicit hard threshold."""
+
+
+class SessionNotFound(VoiceCloneError):
+    """Raised when a real-time session ID cannot be found."""
+
